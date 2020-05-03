@@ -3,7 +3,19 @@ SHELL := bash
 bold := $(shell tput bold)
 norm := $(shell tput sgr0)
 
+# gh-actions shim
+ifdef GITHUB_REPOSITORY
+	REPO_NAME := $(GITHUB_REPOSITORY)
+endif
+
 REPO_NAME ?= $(notdir $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..))/$(shell basename '$(PWD)')
+
+
+$(info [REPO_NAME: $(REPO_NAME)])
+
+
+.PHONY: all
+all:
 
 
 .PHONY: build
