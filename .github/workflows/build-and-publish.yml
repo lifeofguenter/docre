@@ -18,5 +18,7 @@ jobs:
     steps:
       - name: debug
         run: printenv
+      - name: debug2
+        run: ls -lh
       - name: build
         run: make build
