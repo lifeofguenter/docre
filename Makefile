@@ -39,5 +39,5 @@ endif
 .PHONY: docker-login
 docker-login:
 ifeq ($(CI),true)
-	docker login -u "${DOCKER_USERNAME}" -p "${DOCKER_PASSWORD}"
+	docker login -u lifeofguenter -p "${DOCKER_PASSWORD}"
 endif
