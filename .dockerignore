@@ -1,0 +1,7 @@
+.git/
+.idea/
+.gitignore
+docre
+Dockerfile
+Makefile
+README.md
