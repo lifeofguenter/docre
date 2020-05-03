@@ -14,11 +14,13 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
       - name: debug
         run: printenv
-      - name: debug2
-        run: ls -lh
+
       - name: build
         run: make build
