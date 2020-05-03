@@ -27,3 +27,13 @@ jobs:
 
       - name: build
         run: make build
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: publish
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: make publish

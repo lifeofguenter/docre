@@ -29,8 +29,15 @@ build:
 
 
 .PHONY: publish
-publish:
+publish: docker-login
 ifeq ($(GIT_BRANCH), master)
 	@echo -e "🚀🐳 $(bold)Publishing: $(REPO_NAME):latest$(norm) 🐳🚀"
 	docker push '$(REPO_NAME)'
+endif
+
+
+.PHONY: docker-login
+docker-login:
+ifeq ($(CI),true)
+	docker login -u "${DOCKER_USERNAME}" -p "${DOCKER_PASSWORD}"
 endif
