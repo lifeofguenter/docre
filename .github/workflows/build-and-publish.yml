@@ -25,10 +25,62 @@ jobs:
       - name: debug
         run: printenv
 
-      - name: build
-        run: make build
+      - name: build binaries
+        run: make -j4 build
 
-      - name: publish
+      - name: docker build
+        run: make docker-build
+
+      - name: docker publish
         env:
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-        run: make publish
+        run: make docker-publish
+
+      - name: create package
+        if: ${{ startsWith('refs/tags/', github.ref) }}
+        run: make package
+
+      - name: create release
+        id: create_release
+        if: ${{ startsWith('refs/tags/', github.ref) }}
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+          draft: true
+          prerelease: false
+
+      - name: upload release darwin/amd64
+        if: ${{ startsWith('refs/tags/', github.ref) }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/darwin/amd64/docre.zip
+          asset_name: docre_darwin_amd64.zip
+          asset_content_type: application/zip
+
+      - name: upload release linux/amd64
+        if: ${{ startsWith('refs/tags/', github.ref) }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/linux/amd64/docre.zip
+          asset_name: docre_linux_amd64.zip
+          asset_content_type: application/zip
+
+      - name: upload release windows/amd64
+        if: ${{ startsWith('refs/tags/', github.ref) }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/windows/amd64/docre.zip
+          asset_name: docre_windows_amd64.zip
+          asset_content_type: application/zip
