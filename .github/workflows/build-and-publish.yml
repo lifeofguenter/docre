@@ -37,12 +37,12 @@ jobs:
         run: make docker-publish
 
       - name: create package
-        if: ${{ startsWith('refs/tags/', github.ref) }}
+        if: startsWith(github.ref, 'refs/tags/')
         run: make package
 
       - name: create release
         id: create_release
-        if: ${{ startsWith('refs/tags/', github.ref) }}
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -53,7 +53,7 @@ jobs:
           prerelease: false
 
       - name: upload release darwin/amd64
-        if: ${{ startsWith('refs/tags/', github.ref) }}
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -64,7 +64,7 @@ jobs:
           asset_content_type: application/zip
 
       - name: upload release linux/amd64
-        if: ${{ startsWith('refs/tags/', github.ref) }}
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -75,7 +75,7 @@ jobs:
           asset_content_type: application/zip
 
       - name: upload release windows/amd64
-        if: ${{ startsWith('refs/tags/', github.ref) }}
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
