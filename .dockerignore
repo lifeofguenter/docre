@@ -4,7 +4,6 @@
 .editorconfig
 .gitignore
 .goreleaser.yaml
-docre
 Dockerfile
 Makefile
 README.md

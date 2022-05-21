@@ -10,4 +10,9 @@ _Docre_ is a simple docker crontab runner as entrypoint.
 
 ```bash
 CRONTAB="* * * * *" ./docre "date"
+
+Sat 21 May 2022 10:11:00 AM CEST
+Sat 21 May 2022 10:12:00 AM CEST
+Sat 21 May 2022 10:13:00 AM CEST
+...
 ```
