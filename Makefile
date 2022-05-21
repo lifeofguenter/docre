@@ -29,61 +29,8 @@ all:
 
 
 .PHONY: build
-build: build-darwin build-linux build-windows
-
-
-.PHONY: build-darwin
-build-darwin:
-	mkdir -p dist/darwin/amd64
-	docker run --rm \
-		-v "$(PWD):/app" \
-		-w "/app" \
-		-e "GOOS=darwin" \
-		-e "GOARCH=amd64" \
-		-e "CGO_ENABLED=0" \
-		--entrypoint sh \
-		golang:1.14-alpine \
-		-c "go get -d -v && go build -a -v -o dist/darwin/amd64/docre" \
-		2> /dev/stdout | while IFS= read -r line; do printf '[%s] %s\n' "$@" "$${line}"; done; [ "$${PIPESTATUS[0]}" -le "0" ] || exit "$${PIPESTATUS[0]}"
-
-
-.PHONY: build-linux
-build-linux:
-	mkdir -p dist/linux/amd64
-	docker run --rm \
-		-v "$(PWD):/app" \
-		-w "/app" \
-		-e "GOOS=linux" \
-		-e "GOARCH=amd64" \
-		-e "CGO_ENABLED=0" \
-		--entrypoint sh \
-		golang:1.14-alpine \
-		-c "go get -d -v && go build -a -v -o dist/linux/amd64/docre" \
-		2> /dev/stdout | while IFS= read -r line; do printf '[%s] %s\n' "$@" "$${line}"; done; [ "$${PIPESTATUS[0]}" -le "0" ] || exit "$${PIPESTATUS[0]}"
-
-
-.PHONY: build-windows
-build-windows:
-	mkdir -p dist/windows/amd64
-	docker run --rm \
-		-v "$(PWD):/app" \
-		-w "/app" \
-		-e "GOOS=windows" \
-		-e "GOARCH=amd64" \
-		-e "CGO_ENABLED=0" \
-		--entrypoint sh \
-		golang:1.14-alpine \
-		-c "go get -d -v && go build -a -v -o dist/windows/amd64/docre" \
-		2> /dev/stdout | while IFS= read -r line; do printf '[%s] %s\n' "$@" "$${line}"; done; [ "$${PIPESTATUS[0]}" -le "0" ] || exit "$${PIPESTATUS[0]}"
-
-
-.PHONY: package
-package: dist/*/*
-	for file in $^ ; do \
-		pushd "$${file}" ; \
-		zip docre.zip docre ; \
-		popd ; \
-	done
+build:
+	go build
 
 
 .PHONY: docker-build
@@ -98,7 +45,7 @@ docker-build:
 
 .PHONY: docker-publish
 docker-publish:
-ifeq ($(GIT_BRANCH), master)
+ifeq ($(GIT_BRANCH), main)
 	$(call docker_login)
 	@echo -e "🚀🐳 $(bold)Publishing: $(REPO_NAME):latest$(norm) 🐳🚀"
 	docker push '$(REPO_NAME)'
