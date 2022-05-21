@@ -1,7 +1,9 @@
 .git/
+.github/
 .idea/
+.editorconfig
 .gitignore
-docre
+.goreleaser.yaml
 Dockerfile
 Makefile
 README.md
