@@ -18,6 +18,7 @@ func main() {
 	_, err := c.AddFunc(os.Getenv("CRONTAB"), runCmd)
 	if err != nil {
 		log.Printf("Error: %s", err)
+		os.Exit(1)
 	}
 	c.Start()
 	select {}
