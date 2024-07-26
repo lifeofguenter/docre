@@ -5,9 +5,21 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+)
+
+var (
+	wg          sync.WaitGroup
+	WaitTimeout time.Duration = 110
 )
 
 func runCmd() {
+	wg.Add(1)
+	defer wg.Done()
+
 	cmd := exec.Command(os.Args[1], os.Args[2:]...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -26,5 +38,34 @@ func main() {
 	}
 
 	c.Start()
-	select {}
+
+	// Create a channel to receive OS signals.
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+
+	// Wait for a signal.
+	sig := <-sigChan
+	log.Printf("Received signal: %s. Waiting for %d seconds before exiting...", sig, WaitTimeout)
+
+	// Stop the cron scheduler from running new jobs.
+	for _, entry := range c.Entries() {
+		c.Remove(entry.ID)
+	}
+
+	// Wait for the wait group to complete if there are active jobs
+	doneChan := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(doneChan)
+	}()
+
+	select {
+	case <-doneChan:
+		log.Println("All jobs completed. Exiting now.")
+	case <-time.After(WaitTimeout):
+		log.Println("Wait timeout reached. Exiting now.")
+	}
+
+	c.Stop()
+	os.Exit(0)
 }
