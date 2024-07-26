@@ -9,8 +9,12 @@ import (
 
 func runCmd() {
 	cmd := exec.Command(os.Args[1], os.Args[2:]...)
-	output, _ := cmd.CombinedOutput()
-	log.Printf("%s", output)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("ERROR: %s", err)
+	} else {
+		log.Printf("%s", output)
+	}
 }
 
 func main() {
@@ -20,6 +24,7 @@ func main() {
 		log.Printf("Error: %s", err)
 		os.Exit(1)
 	}
+
 	c.Start()
 	select {}
 }
