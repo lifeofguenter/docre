@@ -11,10 +11,9 @@ import (
 	"time"
 )
 
-var (
-	wg          sync.WaitGroup
-	WaitTimeout = 110 * time.Second
-)
+const WaitTimeout = 110
+
+var wg sync.WaitGroup
 
 func runCmd() {
 	wg.Add(1)
@@ -62,7 +61,7 @@ func main() {
 	select {
 	case <-doneChan:
 		log.Println("All jobs completed. Exiting now.")
-	case <-time.After(WaitTimeout):
+	case <-time.After(WaitTimeout * time.Second):
 		log.Println("Wait timeout reached. Exiting now.")
 	}
 
