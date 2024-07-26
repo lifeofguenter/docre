@@ -13,7 +13,7 @@ import (
 
 var (
 	wg          sync.WaitGroup
-	WaitTimeout time.Duration = 110
+	WaitTimeout = 110 * time.Second
 )
 
 func runCmd() {
