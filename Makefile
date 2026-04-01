@@ -25,7 +25,13 @@ $(info [TAG_NAME: $(TAG_NAME)])
 
 
 .PHONY: all
-all:
+all: test build
+
+
+.PHONY: test
+test:
+	go test ./... -covermode=atomic -coverprofile=coverage.out
+	go tool cover -func=coverage.out
 
 
 .PHONY: build

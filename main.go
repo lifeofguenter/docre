@@ -1,70 +1,101 @@
 package main
 
 import (
-	"github.com/robfig/cron/v3"
+	"context"
+	"errors"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
-const WaitTimeout = 110
+const WaitTimeout = 110 * time.Second
 
-var wg sync.WaitGroup
+type scheduler interface {
+	AddFunc(string, func()) (cron.EntryID, error)
+	Start()
+	Stop() context.Context
+}
 
-func runCmd() {
-	wg.Add(1)
-	defer wg.Done()
+var execCommand = exec.Command
 
-	cmd := exec.Command(os.Args[1], os.Args[2:]...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("ERROR: %s", err)
-	} else {
-		log.Printf("%s", output)
+func buildCommand(args []string) (*exec.Cmd, error) {
+	if len(args) < 2 {
+		return nil, errors.New("usage: app <command> [args...]")
+	}
+	return execCommand(args[1], args[2:]...), nil
+}
+
+func runCmd(args []string, logger *log.Logger) func() {
+	return func() {
+		cmd, err := buildCommand(args)
+		if err != nil {
+			logger.Printf("ERROR: %v", err)
+			return
+		}
+
+		output, err := cmd.CombinedOutput()
+		if len(output) > 0 {
+			logger.Printf("%s", output)
+		}
+		if err != nil {
+			logger.Printf("ERROR: %v", err)
+		}
 	}
 }
 
-func main() {
-	c := cron.New()
-	_, err := c.AddFunc(os.Getenv("CRONTAB"), runCmd)
+func newScheduler() scheduler {
+	return cron.New(
+		cron.WithChain(
+			cron.Recover(cron.DefaultLogger),
+			cron.SkipIfStillRunning(cron.DefaultLogger),
+		),
+	)
+}
+
+func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c scheduler, logger *log.Logger) int {
+	if _, err := buildCommand(args); err != nil {
+		logger.Printf("Error: %v", err)
+		return 1
+	}
+
+	spec := getenv("CRONTAB")
+	if spec == "" {
+		logger.Printf("Error: CRONTAB is required")
+		return 1
+	}
+
+	_, err := c.AddFunc(spec, runCmd(args, logger))
 	if err != nil {
-		log.Printf("Error: %s", err)
-		os.Exit(1)
+		logger.Printf("Error: %v", err)
+		return 1
 	}
 
 	c.Start()
 
-	// Create a channel to receive OS signals.
+	sig := <-sigChan
+	logger.Printf("Received signal: %s. Waiting for %s before exiting...", sig, WaitTimeout)
+
+	stopCtx := c.Stop()
+
+	select {
+	case <-stopCtx.Done():
+		logger.Println("All jobs completed. Exiting now.")
+	case <-time.After(WaitTimeout):
+		logger.Println("Wait timeout reached. Exiting now.")
+	}
+
+	return 0
+}
+
+func main() {
+	logger := log.Default()
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 
-	// Wait for a signal.
-	sig := <-sigChan
-	log.Printf("Received signal: %s. Waiting for %d seconds before exiting...", sig, WaitTimeout)
-
-	// Stop the cron scheduler from running new jobs.
-	for _, entry := range c.Entries() {
-		c.Remove(entry.ID)
-	}
-
-	// Wait for the wait group to complete if there are active jobs
-	doneChan := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(doneChan)
-	}()
-
-	select {
-	case <-doneChan:
-		log.Println("All jobs completed. Exiting now.")
-	case <-time.After(WaitTimeout * time.Second):
-		log.Println("Wait timeout reached. Exiting now.")
-	}
-
-	c.Stop()
-	os.Exit(0)
+	os.Exit(run(os.Args, os.Getenv, sigChan, newScheduler(), logger))
 }
