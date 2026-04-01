@@ -25,10 +25,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '^1.22.5'
+          go-version: '1.26'
 
-      - name: build binaries
-        run: make build
+      - name: test & build
+        run: make
+
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          file: coverage.out
 
       - name: docker build
         run: make docker-build
