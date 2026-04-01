@@ -1,6 +1,7 @@
 # docre
 
 [![build and publish](https://github.com/lifeofguenter/docre/actions/workflows/build-and-publish.yml/badge.svg)](https://github.com/lifeofguenter/docre/actions/workflows/build-and-publish.yml)
+[![Coverage Status](https://coveralls.io/repos/github/lifeofguenter/docre/badge.svg?branch=feature/bump-1-26)](https://coveralls.io/github/lifeofguenter/docre?branch=feature/bump-1-26)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=lifeofguenter_docre&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=lifeofguenter_docre)
 [![Docker Pulls](https://img.shields.io/docker/pulls/lifeofguenter/docre?style=flat)](https://hub.docker.com/r/lifeofguenter/docre)
 
