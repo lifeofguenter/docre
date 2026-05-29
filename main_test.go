@@ -21,7 +21,6 @@ type fakeScheduler struct {
 	spec    string
 	job     func()
 	started bool
-	stopCtx context.Context
 	addErr  error
 	stopped bool
 }
@@ -48,9 +47,6 @@ func (f *fakeScheduler) Stop() context.Context {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = true
-	if f.stopCtx != nil {
-		return f.stopCtx
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	return ctx
@@ -79,193 +75,180 @@ func helperExec(scenario string) func(ctx context.Context, name string, args ...
 	}
 }
 
-func TestBuildCommand_Success(t *testing.T) {
-	cmd, err := buildCommand(context.Background(), []string{"app", "echo", "hello"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cmd == nil {
-		t.Fatal("expected command")
+func assertExitCode(t *testing.T, got, want int) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("expected exit code %d, got %d", want, got)
 	}
 }
 
-func TestBuildCommand_MissingCommand(t *testing.T) {
-	_, err := buildCommand(context.Background(), []string{"app"})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "usage: app") {
-		t.Fatalf("expected usage to reference 'app', got %q", err.Error())
-	}
-}
-
-func TestBuildCommand_DefaultName(t *testing.T) {
-	_, err := buildCommand(context.Background(), nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "usage: docre") {
-		t.Fatalf("expected usage to default to 'docre', got %q", err.Error())
-	}
-}
-
-func TestRunCmd_StreamsOutputOnSuccess(t *testing.T) {
-	orig := execCommand
-	defer func() { execCommand = orig }()
-	execCommand = helperExec("success")
-
-	logger, logBuf := newTestLogger()
-	stdout := &bytes.Buffer{}
-	runCmd(context.Background(), []string{"app", "dummy"}, logger, stdout, io.Discard)()
-
-	if !strings.Contains(stdout.String(), "helper success output") {
-		t.Fatalf("expected success output on stdout, got %q", stdout.String())
-	}
-	if logBuf.Len() != 0 {
-		t.Fatalf("expected no log output on success, got %q", logBuf.String())
-	}
-}
-
-func TestRunCmd_StreamsOutputAndLogsErrorOnFailure(t *testing.T) {
-	orig := execCommand
-	defer func() { execCommand = orig }()
-	execCommand = helperExec("fail")
-
-	logger, logBuf := newTestLogger()
-	stdout := &bytes.Buffer{}
-	runCmd(context.Background(), []string{"app", "dummy"}, logger, stdout, io.Discard)()
-
-	if !strings.Contains(stdout.String(), "helper failure output") {
-		t.Fatalf("expected failure output on stdout, got %q", stdout.String())
-	}
-	if !strings.Contains(logBuf.String(), "ERROR: exit status 7") {
-		t.Fatalf("expected exit status in logger, got %q", logBuf.String())
-	}
-}
-
-func TestRunCmd_LogsBuildCommandError(t *testing.T) {
-	logger, buf := newTestLogger()
-	runCmd(context.Background(), []string{"app"}, logger, io.Discard, io.Discard)()
-
-	if !strings.Contains(buf.String(), "usage: app <command> [args...]") {
-		t.Fatalf("expected usage error in logs, got %q", buf.String())
-	}
-}
-
-func TestRun_MissingCommand(t *testing.T) {
-	logger, buf := newTestLogger()
-	code := run([]string{"app"}, func(string) string { return "" }, make(chan os.Signal, 1), &fakeScheduler{}, logger, io.Discard, io.Discard)
-
-	if code != 1 {
-		t.Fatalf("expected exit code 1, got %d", code)
-	}
-	if !strings.Contains(buf.String(), "usage: app <command> [args...]") {
+func assertLogContains(t *testing.T, buf *bytes.Buffer, substr string) {
+	t.Helper()
+	if !strings.Contains(buf.String(), substr) {
 		t.Fatalf("unexpected logs: %q", buf.String())
 	}
 }
 
-func TestRun_MissingCrontab(t *testing.T) {
-	logger, buf := newTestLogger()
-	code := run([]string{"app", "echo"}, func(string) string { return "" }, make(chan os.Signal, 1), &fakeScheduler{}, logger, io.Discard, io.Discard)
+func TestBuildCommand(t *testing.T) {
+	ctx := context.Background()
 
-	if code != 1 {
-		t.Fatalf("expected exit code 1, got %d", code)
-	}
-	if !strings.Contains(buf.String(), "CRONTAB is required") {
-		t.Fatalf("unexpected logs: %q", buf.String())
-	}
-}
-
-func TestRun_InvalidWaitTimeout(t *testing.T) {
-	logger, buf := newTestLogger()
-	getenv := func(k string) string {
-		switch k {
-		case "CRONTAB":
-			return "* * * * *"
-		case "WAIT_TIMEOUT":
-			return "not-a-duration"
+	t.Run("success", func(t *testing.T) {
+		cmd, err := buildCommand(ctx, []string{"app", "echo", "hello"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-		return ""
-	}
-	code := run([]string{"app", "echo"}, getenv, make(chan os.Signal, 1), &fakeScheduler{}, logger, io.Discard, io.Discard)
+		if cmd == nil {
+			t.Fatal("expected command")
+		}
+	})
 
-	if code != 1 {
-		t.Fatalf("expected exit code 1, got %d", code)
-	}
-	if !strings.Contains(buf.String(), "invalid WAIT_TIMEOUT") {
-		t.Fatalf("unexpected logs: %q", buf.String())
-	}
+	t.Run("missing command uses argv name", func(t *testing.T) {
+		_, err := buildCommand(ctx, []string{"app"})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "usage: app") {
+			t.Fatalf("expected usage to reference 'app', got %q", err.Error())
+		}
+	})
+
+	t.Run("missing args defaults to docre", func(t *testing.T) {
+		_, err := buildCommand(ctx, nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "usage: docre") {
+			t.Fatalf("expected usage to default to 'docre', got %q", err.Error())
+		}
+	})
 }
 
-func TestRun_AddFuncError(t *testing.T) {
-	logger, buf := newTestLogger()
-	sigChan := make(chan os.Signal, 1)
+func TestRunCmd(t *testing.T) {
+	t.Run("streams output on success", func(t *testing.T) {
+		orig := execCommand
+		defer func() { execCommand = orig }()
+		execCommand = helperExec("success")
 
-	code := run(
-		[]string{"app", "echo"},
-		envOnly("CRONTAB", "* * * * *"),
-		sigChan,
-		&fakeScheduler{addErr: errors.New("bad cron")},
-		logger,
-		io.Discard, io.Discard,
-	)
+		logger, logBuf := newTestLogger()
+		stdout := &bytes.Buffer{}
+		runCmd(context.Background(), []string{"app", "dummy"}, logger, stdout, io.Discard)()
 
-	if code != 1 {
-		t.Fatalf("expected exit code 1, got %d", code)
-	}
-	if !strings.Contains(buf.String(), "bad cron") {
-		t.Fatalf("unexpected logs: %q", buf.String())
-	}
+		if !strings.Contains(stdout.String(), "helper success output") {
+			t.Fatalf("expected success output on stdout, got %q", stdout.String())
+		}
+		if logBuf.Len() != 0 {
+			t.Fatalf("expected no log output on success, got %q", logBuf.String())
+		}
+	})
+
+	t.Run("streams output and logs error on failure", func(t *testing.T) {
+		orig := execCommand
+		defer func() { execCommand = orig }()
+		execCommand = helperExec("fail")
+
+		logger, logBuf := newTestLogger()
+		stdout := &bytes.Buffer{}
+		runCmd(context.Background(), []string{"app", "dummy"}, logger, stdout, io.Discard)()
+
+		if !strings.Contains(stdout.String(), "helper failure output") {
+			t.Fatalf("expected failure output on stdout, got %q", stdout.String())
+		}
+		assertLogContains(t, logBuf, "ERROR: exit status 7")
+	})
+
+	t.Run("logs build command error", func(t *testing.T) {
+		logger, buf := newTestLogger()
+		runCmd(context.Background(), []string{"app"}, logger, io.Discard, io.Discard)()
+
+		assertLogContains(t, buf, "usage: app <command> [args...]")
+	})
 }
 
-func TestRun_CleanShutdown(t *testing.T) {
-	logger, buf := newTestLogger()
-	sigChan := make(chan os.Signal, 1)
+func TestRun(t *testing.T) {
+	t.Run("missing command", func(t *testing.T) {
+		logger, buf := newTestLogger()
+		code := run([]string{"app"}, envOnly("", ""), make(chan os.Signal, 1), &fakeScheduler{}, logger, io.Discard, io.Discard)
 
-	stopCtx, cancel := context.WithCancel(context.Background())
-	cancel()
+		assertExitCode(t, code, 1)
+		assertLogContains(t, buf, "usage: app <command> [args...]")
+	})
 
-	s := &fakeScheduler{stopCtx: stopCtx}
+	t.Run("missing crontab", func(t *testing.T) {
+		logger, buf := newTestLogger()
+		code := run([]string{"app", "echo"}, envOnly("", ""), make(chan os.Signal, 1), &fakeScheduler{}, logger, io.Discard, io.Discard)
 
-	done := make(chan int, 1)
-	go func() {
-		done <- run(
+		assertExitCode(t, code, 1)
+		assertLogContains(t, buf, "CRONTAB is required")
+	})
+
+	t.Run("invalid wait timeout", func(t *testing.T) {
+		logger, buf := newTestLogger()
+		getenv := func(k string) string {
+			switch k {
+			case "CRONTAB":
+				return "* * * * *"
+			case "WAIT_TIMEOUT":
+				return "not-a-duration"
+			}
+			return ""
+		}
+		code := run([]string{"app", "echo"}, getenv, make(chan os.Signal, 1), &fakeScheduler{}, logger, io.Discard, io.Discard)
+
+		assertExitCode(t, code, 1)
+		assertLogContains(t, buf, "invalid WAIT_TIMEOUT")
+	})
+
+	t.Run("add func error", func(t *testing.T) {
+		logger, buf := newTestLogger()
+		code := run(
 			[]string{"app", "echo"},
 			envOnly("CRONTAB", "* * * * *"),
-			sigChan,
-			s,
+			make(chan os.Signal, 1),
+			&fakeScheduler{addErr: errors.New("bad cron")},
 			logger,
 			io.Discard, io.Discard,
 		)
-	}()
 
-	sigChan <- syscall.SIGTERM
+		assertExitCode(t, code, 1)
+		assertLogContains(t, buf, "bad cron")
+	})
 
-	code := <-done
-	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d", code)
-	}
+	t.Run("clean shutdown", func(t *testing.T) {
+		logger, buf := newTestLogger()
+		sigChan := make(chan os.Signal, 1)
+		s := &fakeScheduler{}
 
-	if !s.started {
-		t.Fatal("expected scheduler to start")
-	}
-	if !s.stopped {
-		t.Fatal("expected scheduler to stop")
-	}
-	if s.job == nil {
-		t.Fatal("expected job to be registered")
-	}
+		done := make(chan int, 1)
+		go func() {
+			done <- run(
+				[]string{"app", "echo"},
+				envOnly("CRONTAB", "* * * * *"),
+				sigChan,
+				s,
+				logger,
+				io.Discard, io.Discard,
+			)
+		}()
 
-	logs := buf.String()
-	if !strings.Contains(logs, "Received signal: terminated") {
-		t.Fatalf("unexpected logs: %q", logs)
-	}
-	if !strings.Contains(logs, "All jobs completed. Exiting now.") {
-		t.Fatalf("unexpected logs: %q", logs)
-	}
+		sigChan <- syscall.SIGTERM
+		assertExitCode(t, <-done, 0)
+
+		if !s.started {
+			t.Fatal("expected scheduler to start")
+		}
+		if !s.stopped {
+			t.Fatal("expected scheduler to stop")
+		}
+		if s.job == nil {
+			t.Fatal("expected job to be registered")
+		}
+
+		assertLogContains(t, buf, "Received signal: terminated")
+		assertLogContains(t, buf, "All jobs completed. Exiting now.")
+	})
 }
 
-func TestNewScheduler_AddsJob(t *testing.T) {
+func TestNewScheduler(t *testing.T) {
 	logger, _ := newTestLogger()
 	s := newScheduler(logger)
 	if s == nil {

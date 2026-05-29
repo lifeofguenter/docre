@@ -15,7 +15,10 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const DefaultWaitTimeout = 110 * time.Second
+const (
+	DefaultWaitTimeout = 110 * time.Second
+	errLogFmt          = "ERROR: %v"
+)
 
 type scheduler interface {
 	AddFunc(string, func()) (cron.EntryID, error)
@@ -40,14 +43,14 @@ func runCmd(ctx context.Context, args []string, logger *log.Logger, stdout, stde
 	return func() {
 		cmd, err := buildCommand(ctx, args)
 		if err != nil {
-			logger.Printf("ERROR: %v", err)
+			logger.Printf(errLogFmt, err)
 			return
 		}
 
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
 		if err := cmd.Run(); err != nil {
-			logger.Printf("ERROR: %v", err)
+			logger.Printf(errLogFmt, err)
 		}
 	}
 }
@@ -67,7 +70,7 @@ func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c 
 	defer cancelRun()
 
 	if _, err := buildCommand(runCtx, args); err != nil {
-		logger.Printf("ERROR: %v", err)
+		logger.Printf(errLogFmt, err)
 		return 1
 	}
 
@@ -88,7 +91,7 @@ func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c 
 	}
 
 	if _, err := c.AddFunc(spec, runCmd(runCtx, args, logger, stdout, stderr)); err != nil {
-		logger.Printf("ERROR: %v", err)
+		logger.Printf(errLogFmt, err)
 		return 1
 	}
 
