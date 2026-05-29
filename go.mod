@@ -2,4 +2,4 @@ module github.com/lifeofguenter/docre
 
 go 1.26
 
-require github.com/robfig/cron/v3 v3.0.1
+require github.com/netresearch/go-cron v0.14.0

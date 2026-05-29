@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/robfig/cron/v3"
+	cron "github.com/netresearch/go-cron"
 )
 
 type fakeScheduler struct {
@@ -26,7 +26,7 @@ type fakeScheduler struct {
 	blockStop bool
 }
 
-func (f *fakeScheduler) AddFunc(spec string, cmd func()) (cron.EntryID, error) {
+func (f *fakeScheduler) AddFunc(spec string, cmd func(), _ ...cron.JobOption) (cron.EntryID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
