@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/robfig/cron/v3"
+	cron "github.com/netresearch/go-cron"
 )
 
 const (
@@ -21,7 +21,7 @@ const (
 )
 
 type scheduler interface {
-	AddFunc(string, func()) (cron.EntryID, error)
+	AddFunc(string, func(), ...cron.JobOption) (cron.EntryID, error)
 	Start()
 	Stop() context.Context
 }
