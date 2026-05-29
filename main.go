@@ -2,18 +2,23 @@ package main
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/robfig/cron/v3"
 )
 
-const WaitTimeout = 110 * time.Second
+const (
+	DefaultWaitTimeout = 110 * time.Second
+	errLogFmt          = "ERROR: %v"
+)
 
 type scheduler interface {
 	AddFunc(string, func()) (cron.EntryID, error)
@@ -21,72 +26,91 @@ type scheduler interface {
 	Stop() context.Context
 }
 
-var execCommand = exec.Command
+var (
+	execCommand = exec.CommandContext
+	osExit      = os.Exit
+)
 
-func buildCommand(args []string) (*exec.Cmd, error) {
+func buildCommand(ctx context.Context, args []string) (*exec.Cmd, error) {
 	if len(args) < 2 {
-		return nil, errors.New("usage: app <command> [args...]")
+		name := "docre"
+		if len(args) > 0 && args[0] != "" {
+			name = filepath.Base(args[0])
+		}
+		return nil, fmt.Errorf("usage: %s <command> [args...]", name)
 	}
-	return execCommand(args[1], args[2:]...), nil
+	return execCommand(ctx, args[1], args[2:]...), nil
 }
 
-func runCmd(args []string, logger *log.Logger) func() {
+func runCmd(ctx context.Context, args []string, logger *log.Logger, stdout, stderr io.Writer) func() {
 	return func() {
-		cmd, err := buildCommand(args)
+		cmd, err := buildCommand(ctx, args)
 		if err != nil {
-			logger.Printf("ERROR: %v", err)
+			logger.Printf(errLogFmt, err)
 			return
 		}
 
-		output, err := cmd.CombinedOutput()
-		if len(output) > 0 {
-			logger.Printf("%s", output)
-		}
-		if err != nil {
-			logger.Printf("ERROR: %v", err)
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
+		if err := cmd.Run(); err != nil {
+			logger.Printf(errLogFmt, err)
 		}
 	}
 }
 
-func newScheduler() scheduler {
+func newScheduler(logger *log.Logger) scheduler {
+	cronLogger := cron.PrintfLogger(logger)
 	return cron.New(
 		cron.WithChain(
-			cron.Recover(cron.DefaultLogger),
-			cron.SkipIfStillRunning(cron.DefaultLogger),
+			cron.Recover(cronLogger),
+			cron.SkipIfStillRunning(cronLogger),
 		),
 	)
 }
 
-func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c scheduler, logger *log.Logger) int {
-	if _, err := buildCommand(args); err != nil {
-		logger.Printf("Error: %v", err)
+func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c scheduler, logger *log.Logger, stdout, stderr io.Writer) int {
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	if _, err := buildCommand(runCtx, args); err != nil {
+		logger.Printf(errLogFmt, err)
 		return 1
 	}
 
 	spec := getenv("CRONTAB")
 	if spec == "" {
-		logger.Printf("Error: CRONTAB is required")
+		logger.Printf("ERROR: CRONTAB is required")
 		return 1
 	}
 
-	_, err := c.AddFunc(spec, runCmd(args, logger))
-	if err != nil {
-		logger.Printf("Error: %v", err)
+	waitTimeout := DefaultWaitTimeout
+	if v := getenv("WAIT_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			logger.Printf("ERROR: invalid WAIT_TIMEOUT %q: %v", v, err)
+			return 1
+		}
+		waitTimeout = d
+	}
+
+	if _, err := c.AddFunc(spec, runCmd(runCtx, args, logger, stdout, stderr)); err != nil {
+		logger.Printf(errLogFmt, err)
 		return 1
 	}
 
 	c.Start()
 
 	sig := <-sigChan
-	logger.Printf("Received signal: %s. Waiting for %s before exiting...", sig, WaitTimeout)
+	logger.Printf("Received signal: %s. Waiting for %s before exiting...", sig, waitTimeout)
 
 	stopCtx := c.Stop()
 
 	select {
 	case <-stopCtx.Done():
 		logger.Println("All jobs completed. Exiting now.")
-	case <-time.After(WaitTimeout):
-		logger.Println("Wait timeout reached. Exiting now.")
+	case <-time.After(waitTimeout):
+		logger.Println("Wait timeout reached. Killing running job and exiting now.")
+		cancelRun()
 	}
 
 	return 0
@@ -96,6 +120,7 @@ func main() {
 	logger := log.Default()
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigChan)
 
-	os.Exit(run(os.Args, os.Getenv, sigChan, newScheduler(), logger))
+	osExit(run(os.Args, os.Getenv, sigChan, newScheduler(logger), logger, os.Stdout, os.Stderr))
 }

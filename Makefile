@@ -16,7 +16,7 @@ else ifneq (,$(findstring refs/tags/,$(GITHUB_REF)))
 endif
 endif
 
-REPO_NAME ?= $(notdir $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..))/$(shell basename '$(PWD)')
+REPO_NAME ?= lifeofguenter/$(shell basename '$(PWD)')
 
 
 $(info [REPO_NAME: $(REPO_NAME)])
@@ -64,5 +64,5 @@ endif
 
 
 define docker_login
-	docker login -u lifeofguenter -p '$(DOCKER_PASSWORD)'
+	@echo '$(DOCKER_PASSWORD)' | docker login -u lifeofguenter --password-stdin
 endef
