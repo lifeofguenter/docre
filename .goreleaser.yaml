@@ -1,3 +1,5 @@
+version: 2
+
 builds:
   - id: main
     ldflags: "-s -w"
@@ -11,17 +13,14 @@ builds:
       - arm64
 
 archives:
-  - format_overrides:
-      - goos: windows
-        format: zip
-    files:
-      - none*
+  - formats:
+      - tar.gz
 
 checksum:
   name_template: 'checksums.txt'
 
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
