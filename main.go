@@ -26,7 +26,10 @@ type scheduler interface {
 	Stop() context.Context
 }
 
-var execCommand = exec.CommandContext
+var (
+	execCommand = exec.CommandContext
+	osExit      = os.Exit
+)
 
 func buildCommand(ctx context.Context, args []string) (*exec.Cmd, error) {
 	if len(args) < 2 {
@@ -117,6 +120,7 @@ func main() {
 	logger := log.Default()
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigChan)
 
-	os.Exit(run(os.Args, os.Getenv, sigChan, newScheduler(logger), logger, os.Stdout, os.Stderr))
+	osExit(run(os.Args, os.Getenv, sigChan, newScheduler(logger), logger, os.Stdout, os.Stderr))
 }

@@ -17,12 +17,13 @@ import (
 )
 
 type fakeScheduler struct {
-	mu      sync.Mutex
-	spec    string
-	job     func()
-	started bool
-	addErr  error
-	stopped bool
+	mu        sync.Mutex
+	spec      string
+	job       func()
+	started   bool
+	addErr    error
+	stopped   bool
+	blockStop bool
 }
 
 func (f *fakeScheduler) AddFunc(spec string, cmd func()) (cron.EntryID, error) {
@@ -47,6 +48,9 @@ func (f *fakeScheduler) Stop() context.Context {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = true
+	if f.blockStop {
+		return context.Background()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	return ctx
@@ -246,6 +250,59 @@ func TestRun(t *testing.T) {
 		assertLogContains(t, buf, "Received signal: terminated")
 		assertLogContains(t, buf, "All jobs completed. Exiting now.")
 	})
+
+	t.Run("timeout shutdown kills running job", func(t *testing.T) {
+		logger, buf := newTestLogger()
+		sigChan := make(chan os.Signal, 1)
+		s := &fakeScheduler{blockStop: true}
+
+		getenv := func(k string) string {
+			switch k {
+			case "CRONTAB":
+				return "* * * * *"
+			case "WAIT_TIMEOUT":
+				return "10ms"
+			}
+			return ""
+		}
+
+		done := make(chan int, 1)
+		go func() {
+			done <- run(
+				[]string{"app", "echo"},
+				getenv,
+				sigChan,
+				s,
+				logger,
+				io.Discard, io.Discard,
+			)
+		}()
+
+		sigChan <- syscall.SIGTERM
+		assertExitCode(t, <-done, 0)
+		assertLogContains(t, buf, "Wait timeout reached")
+	})
+}
+
+func TestMainExits(t *testing.T) {
+	origExit := osExit
+	origArgs := os.Args
+	origLogOutput := log.Default().Writer()
+	defer func() {
+		osExit = origExit
+		os.Args = origArgs
+		log.Default().SetOutput(origLogOutput)
+	}()
+
+	log.Default().SetOutput(io.Discard)
+
+	var captured int
+	osExit = func(code int) { captured = code }
+	os.Args = []string{"docre"}
+
+	main()
+
+	assertExitCode(t, captured, 1)
 }
 
 func TestNewScheduler(t *testing.T) {
