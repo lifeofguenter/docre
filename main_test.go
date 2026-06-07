@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -16,10 +17,14 @@ import (
 	cron "github.com/netresearch/go-cron"
 )
 
+type schedEntry struct {
+	spec string
+	job  func()
+}
+
 type fakeScheduler struct {
 	mu        sync.Mutex
-	spec      string
-	job       func()
+	entries   []schedEntry
 	started   bool
 	addErr    error
 	stopped   bool
@@ -33,9 +38,8 @@ func (f *fakeScheduler) AddFunc(spec string, cmd func(), _ ...cron.JobOption) (c
 	if f.addErr != nil {
 		return 0, f.addErr
 	}
-	f.spec = spec
-	f.job = cmd
-	return 1, nil
+	f.entries = append(f.entries, schedEntry{spec: spec, job: cmd})
+	return cron.EntryID(len(f.entries)), nil
 }
 
 func (f *fakeScheduler) Start() {
@@ -93,41 +97,127 @@ func assertLogContains(t *testing.T, buf *bytes.Buffer, substr string) {
 	}
 }
 
-func TestBuildCommand(t *testing.T) {
-	ctx := context.Background()
+func TestParseCrontabLine(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		wantSpec string
+		wantArgs []string
+	}{
+		{"5-field", "0 * * * * echo hello world", "0 * * * *", []string{"echo", "hello", "world"}},
+		{"@hourly", "@hourly /bin/run.sh", "@hourly", []string{"/bin/run.sh"}},
+		{"@every", "@every 5m curl https://example.com", "@every 5m", []string{"curl", "https://example.com"}},
+		{"extra whitespace", "  *  *  *  *  *   echo   hi  ", "* * * * *", []string{"echo", "hi"}},
+	}
 
-	t.Run("success", func(t *testing.T) {
-		cmd, err := buildCommand(ctx, []string{"app", "echo", "hello"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cmd == nil {
-			t.Fatal("expected command")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			j, err := parseCrontabLine(tc.line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if j.spec != tc.wantSpec {
+				t.Fatalf("spec: got %q, want %q", j.spec, tc.wantSpec)
+			}
+			if !slices.Equal(j.args, tc.wantArgs) {
+				t.Fatalf("args: got %v, want %v", j.args, tc.wantArgs)
+			}
+		})
+	}
+
+	t.Run("missing command", func(t *testing.T) {
+		_, err := parseCrontabLine("* * * * *")
+		if err == nil || !strings.Contains(err.Error(), "missing command") {
+			t.Fatalf("expected missing-command error, got %v", err)
 		}
 	})
 
-	t.Run("missing command uses argv name", func(t *testing.T) {
-		_, err := buildCommand(ctx, []string{"app"})
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "usage: app") {
-			t.Fatalf("expected usage to reference 'app', got %q", err.Error())
+	t.Run("@every missing duration", func(t *testing.T) {
+		_, err := parseCrontabLine("@every 5m")
+		if err == nil || !strings.Contains(err.Error(), "missing command") {
+			t.Fatalf("expected missing-command error, got %v", err)
 		}
 	})
 
-	t.Run("missing args defaults to docre", func(t *testing.T) {
-		_, err := buildCommand(ctx, nil)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "usage: docre") {
-			t.Fatalf("expected usage to default to 'docre', got %q", err.Error())
+	t.Run("empty line", func(t *testing.T) {
+		_, err := parseCrontabLine("   \t  ")
+		if err == nil || !strings.Contains(err.Error(), "empty line") {
+			t.Fatalf("expected empty-line error, got %v", err)
 		}
 	})
 }
 
-func TestRunCmd(t *testing.T) {
+func TestLoadJobs(t *testing.T) {
+	t.Run("argv command (old style)", func(t *testing.T) {
+		jobs, err := loadJobs("* * * * *", []string{"app", "echo", "hi"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(jobs) != 1 {
+			t.Fatalf("expected 1 job, got %d", len(jobs))
+		}
+		if jobs[0].spec != "* * * * *" {
+			t.Fatalf("spec: %q", jobs[0].spec)
+		}
+		if !slices.Equal(jobs[0].args, []string{"echo", "hi"}) {
+			t.Fatalf("args: %v", jobs[0].args)
+		}
+	})
+
+	t.Run("argv command with empty CRONTAB", func(t *testing.T) {
+		_, err := loadJobs("", []string{"app", "echo"})
+		if err == nil || !strings.Contains(err.Error(), "CRONTAB is required") {
+			t.Fatalf("expected CRONTAB-required error, got %v", err)
+		}
+	})
+
+	t.Run("multi-line CRONTAB with comments and blanks", func(t *testing.T) {
+		spec := "# every minute\n* * * * * echo a\n\n0 * * * * echo b\n# trailing comment\n"
+		jobs, err := loadJobs(spec, []string{"app"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(jobs) != 2 {
+			t.Fatalf("expected 2 jobs, got %d", len(jobs))
+		}
+		if jobs[0].spec != "* * * * *" || !slices.Equal(jobs[0].args, []string{"echo", "a"}) {
+			t.Fatalf("job 0: %+v", jobs[0])
+		}
+		if jobs[1].spec != "0 * * * *" || !slices.Equal(jobs[1].args, []string{"echo", "b"}) {
+			t.Fatalf("job 1: %+v", jobs[1])
+		}
+	})
+
+	t.Run("no argv and no CRONTAB", func(t *testing.T) {
+		_, err := loadJobs("", []string{"app"})
+		if err == nil || !strings.Contains(err.Error(), "usage: app <command>") {
+			t.Fatalf("expected usage error, got %v", err)
+		}
+	})
+
+	t.Run("CRONTAB with only comments", func(t *testing.T) {
+		_, err := loadJobs("# nothing here\n\n", []string{"app"})
+		if err == nil || !strings.Contains(err.Error(), "CRONTAB has no jobs") {
+			t.Fatalf("expected no-jobs error, got %v", err)
+		}
+	})
+
+	t.Run("multi-line CRONTAB with invalid line", func(t *testing.T) {
+		_, err := loadJobs("* * * * * echo a\n* * * * *\n", []string{"app"})
+		if err == nil || !strings.Contains(err.Error(), "crontab line 2") {
+			t.Fatalf("expected line-2 error, got %v", err)
+		}
+	})
+
+	t.Run("usage defaults to docre when argv empty", func(t *testing.T) {
+		_, err := loadJobs("", nil)
+		if err == nil || !strings.Contains(err.Error(), "usage: docre") {
+			t.Fatalf("expected docre usage error, got %v", err)
+		}
+	})
+}
+
+func TestRunJob(t *testing.T) {
 	t.Run("streams output on success", func(t *testing.T) {
 		orig := execCommand
 		defer func() { execCommand = orig }()
@@ -135,7 +225,7 @@ func TestRunCmd(t *testing.T) {
 
 		logger, logBuf := newTestLogger()
 		stdout := &bytes.Buffer{}
-		runCmd(context.Background(), []string{"app", "dummy"}, logger, stdout, io.Discard)()
+		runJob(context.Background(), job{args: []string{"dummy"}}, logger, stdout, io.Discard)()
 
 		if !strings.Contains(stdout.String(), "helper success output") {
 			t.Fatalf("expected success output on stdout, got %q", stdout.String())
@@ -152,19 +242,12 @@ func TestRunCmd(t *testing.T) {
 
 		logger, logBuf := newTestLogger()
 		stdout := &bytes.Buffer{}
-		runCmd(context.Background(), []string{"app", "dummy"}, logger, stdout, io.Discard)()
+		runJob(context.Background(), job{args: []string{"dummy"}}, logger, stdout, io.Discard)()
 
 		if !strings.Contains(stdout.String(), "helper failure output") {
 			t.Fatalf("expected failure output on stdout, got %q", stdout.String())
 		}
 		assertLogContains(t, logBuf, "ERROR: exit status 7")
-	})
-
-	t.Run("logs build command error", func(t *testing.T) {
-		logger, buf := newTestLogger()
-		runCmd(context.Background(), []string{"app"}, logger, io.Discard, io.Discard)()
-
-		assertLogContains(t, buf, "usage: app <command> [args...]")
 	})
 }
 
@@ -217,7 +300,7 @@ func TestRun(t *testing.T) {
 		assertLogContains(t, buf, "bad cron")
 	})
 
-	t.Run("clean shutdown", func(t *testing.T) {
+	t.Run("clean shutdown (old style)", func(t *testing.T) {
 		logger, buf := newTestLogger()
 		sigChan := make(chan os.Signal, 1)
 		s := &fakeScheduler{}
@@ -243,12 +326,75 @@ func TestRun(t *testing.T) {
 		if !s.stopped {
 			t.Fatal("expected scheduler to stop")
 		}
-		if s.job == nil {
-			t.Fatal("expected job to be registered")
+		if len(s.entries) != 1 {
+			t.Fatalf("expected 1 entry, got %d", len(s.entries))
+		}
+		if s.entries[0].spec != "* * * * *" {
+			t.Fatalf("entry spec: %q", s.entries[0].spec)
 		}
 
 		assertLogContains(t, buf, "Received signal: terminated")
 		assertLogContains(t, buf, "All jobs completed. Exiting now.")
+	})
+
+	t.Run("clean shutdown (multi-line CRONTAB)", func(t *testing.T) {
+		logger, buf := newTestLogger()
+		sigChan := make(chan os.Signal, 1)
+		s := &fakeScheduler{}
+
+		crontab := "* * * * * echo a\n0 * * * * echo b\n@every 30s echo c"
+
+		done := make(chan int, 1)
+		go func() {
+			done <- run(
+				[]string{"app"},
+				envOnly("CRONTAB", crontab),
+				sigChan,
+				s,
+				logger,
+				io.Discard, io.Discard,
+			)
+		}()
+
+		sigChan <- syscall.SIGTERM
+		assertExitCode(t, <-done, 0)
+
+		if len(s.entries) != 3 {
+			t.Fatalf("expected 3 entries, got %d", len(s.entries))
+		}
+		wantSpecs := []string{"* * * * *", "0 * * * *", "@every 30s"}
+		for i, want := range wantSpecs {
+			if s.entries[i].spec != want {
+				t.Fatalf("entry %d spec: got %q, want %q", i, s.entries[i].spec, want)
+			}
+		}
+
+		assertLogContains(t, buf, "All jobs completed. Exiting now.")
+	})
+
+	t.Run("multi-line CRONTAB jobs invoke their own commands", func(t *testing.T) {
+		orig := execCommand
+		defer func() { execCommand = orig }()
+
+		var calls []string
+		execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			calls = append(calls, name)
+			return helperExec("success")(ctx, name, args...)
+		}
+
+		jobs, err := loadJobs("* * * * * /bin/first\n0 * * * * /bin/second", []string{"app"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		logger, _ := newTestLogger()
+		for _, j := range jobs {
+			runJob(context.Background(), j, logger, io.Discard, io.Discard)()
+		}
+
+		if !slices.Equal(calls, []string{"/bin/first", "/bin/second"}) {
+			t.Fatalf("expected /bin/first then /bin/second, got %v", calls)
+		}
 	})
 
 	t.Run("timeout shutdown kills running job", func(t *testing.T) {
