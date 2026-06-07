@@ -176,7 +176,7 @@ func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c 
 func main() {
 	logger := log.Default()
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 	defer signal.Stop(sigChan)
 
 	osExit(run(os.Args, os.Getenv, sigChan, newScheduler(logger), logger, os.Stdout, os.Stderr))
