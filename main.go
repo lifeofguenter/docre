@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,30 +28,88 @@ type scheduler interface {
 	Stop() context.Context
 }
 
+type job struct {
+	spec string
+	args []string
+}
+
 var (
 	execCommand = exec.CommandContext
 	osExit      = os.Exit
 )
 
-func buildCommand(ctx context.Context, args []string) (*exec.Cmd, error) {
-	if len(args) < 2 {
-		name := "docre"
-		if len(args) > 0 && args[0] != "" {
-			name = filepath.Base(args[0])
-		}
-		return nil, fmt.Errorf("usage: %s <command> [args...]", name)
+func usageError(argv0 string) error {
+	name := "docre"
+	if argv0 != "" {
+		name = filepath.Base(argv0)
 	}
-	return execCommand(ctx, args[1], args[2:]...), nil
+	return fmt.Errorf("usage: %s <command> [args...]", name)
 }
 
-func runCmd(ctx context.Context, args []string, logger *log.Logger, stdout, stderr io.Writer) func() {
-	return func() {
-		cmd, err := buildCommand(ctx, args)
-		if err != nil {
-			logger.Printf(errLogFmt, err)
-			return
-		}
+func parseCrontabLine(line string) (job, error) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return job{}, errors.New("empty line")
+	}
 
+	var specFields int
+	switch {
+	case fields[0] == "@every":
+		specFields = 2
+	case strings.HasPrefix(fields[0], "@"):
+		specFields = 1
+	default:
+		specFields = 5
+	}
+
+	if len(fields) <= specFields {
+		return job{}, errors.New("missing command")
+	}
+
+	return job{
+		spec: strings.Join(fields[:specFields], " "),
+		args: fields[specFields:],
+	}, nil
+}
+
+func loadJobs(crontab string, argv []string) ([]job, error) {
+	if len(argv) >= 2 {
+		spec := strings.TrimSpace(crontab)
+		if spec == "" {
+			return nil, errors.New("CRONTAB is required")
+		}
+		return []job{{spec: spec, args: argv[1:]}}, nil
+	}
+
+	var argv0 string
+	if len(argv) > 0 {
+		argv0 = argv[0]
+	}
+	if strings.TrimSpace(crontab) == "" {
+		return nil, usageError(argv0)
+	}
+
+	var jobs []job
+	for i, raw := range strings.Split(crontab, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		j, err := parseCrontabLine(line)
+		if err != nil {
+			return nil, fmt.Errorf("crontab line %d: %w", i+1, err)
+		}
+		jobs = append(jobs, j)
+	}
+	if len(jobs) == 0 {
+		return nil, errors.New("CRONTAB has no jobs")
+	}
+	return jobs, nil
+}
+
+func runJob(ctx context.Context, j job, logger *log.Logger, stdout, stderr io.Writer) func() {
+	return func() {
+		cmd := execCommand(ctx, j.args[0], j.args[1:]...)
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
 		if err := cmd.Run(); err != nil {
@@ -72,14 +132,9 @@ func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c 
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
 
-	if _, err := buildCommand(runCtx, args); err != nil {
+	jobs, err := loadJobs(getenv("CRONTAB"), args)
+	if err != nil {
 		logger.Printf(errLogFmt, err)
-		return 1
-	}
-
-	spec := getenv("CRONTAB")
-	if spec == "" {
-		logger.Printf("ERROR: CRONTAB is required")
 		return 1
 	}
 
@@ -93,9 +148,11 @@ func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c 
 		waitTimeout = d
 	}
 
-	if _, err := c.AddFunc(spec, runCmd(runCtx, args, logger, stdout, stderr)); err != nil {
-		logger.Printf(errLogFmt, err)
-		return 1
+	for _, j := range jobs {
+		if _, err := c.AddFunc(j.spec, runJob(runCtx, j, logger, stdout, stderr)); err != nil {
+			logger.Printf(errLogFmt, err)
+			return 1
+		}
 	}
 
 	c.Start()
