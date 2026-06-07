@@ -34,7 +34,7 @@ Lines beginning with `#` and blank lines are ignored. Each tick streams the job'
 | Env var | Required | Default | Description |
 | --- | --- | --- | --- |
 | `CRONTAB` | yes | — | Either a single crontab spec (when a command is passed on argv) or one `<spec> <command>` per line (when no argv command is given). Supports 5-field specs, `@hourly`/`@daily`/etc. macros, and `@every <duration>`. |
-| `WAIT_TIMEOUT` | no | `110s` | How long to wait for in-flight jobs to finish on SIGTERM/SIGINT before killing them. Any [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) value. |
+| `WAIT_TIMEOUT` | no | `110s` | How long to wait for in-flight jobs to finish on SIGTERM/SIGINT/SIGQUIT before killing them. Any [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) value. |
 
 ### Behavior
 
@@ -42,4 +42,4 @@ Lines beginning with `#` and blank lines are ignored. Each tick streams the job'
 - **Commands are exec'd directly**, not via a shell. For pipes, redirects, or shell expansion, wrap with `sh -c "..."`.
 - **Overlapping ticks are skipped, not queued.** Per job: if a previous run is still in progress when its next tick fires, that tick is dropped (`cron.SkipIfStillRunning`).
 - **Panics in jobs are recovered** (`cron.Recover`). Subprocess failures are logged as `ERROR: exit status N`.
-- **Graceful shutdown.** On SIGINT or SIGTERM, docre stops scheduling new ticks and waits up to `WAIT_TIMEOUT` for the running jobs to finish. If the timeout fires, the running children are killed.
+- **Graceful shutdown.** On SIGINT, SIGTERM, or SIGQUIT, docre stops scheduling new ticks and waits up to `WAIT_TIMEOUT` for the running jobs to finish. If the timeout fires, the running children are killed. (SIGQUIT is caught so the Go runtime does not emit its default all-goroutine stack dump.)
