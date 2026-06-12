@@ -12,7 +12,7 @@ COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/docre
 
-FROM alpine:3.23
+FROM alpine:3.24
 
 COPY --from=build /out/docre /usr/local/bin/docre
 
