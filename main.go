@@ -33,6 +33,69 @@ type job struct {
 	args []string
 }
 
+// logLevel gates which cron.Logger messages are emitted. error < warn < info.
+type logLevel int
+
+const (
+	levelError logLevel = iota
+	levelWarn
+	levelInfo
+)
+
+func parseLogLevel(s string) (logLevel, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "warn":
+		return levelWarn, nil
+	case "error":
+		return levelError, nil
+	case "info":
+		return levelInfo, nil
+	default:
+		return 0, fmt.Errorf("invalid LOG_LEVEL %q (want error, warn, or info)", s)
+	}
+}
+
+// leveledCronLogger adapts the standard logger to the cron.Logger interface
+// with level-based gating. cron exposes only Info and Error, yet emits a flood
+// of routine per-tick Info messages (run, schedule, wake, ...). Two Info
+// messages carry operational signal and are promoted to warn so they surface
+// without the rest of the chatter: "skip" (SkipIfStillRunning dropped an
+// overlapping run) and "panic recovered" (Recover caught a panicking job).
+// Errors are always emitted.
+type leveledCronLogger struct {
+	logger *log.Logger
+	level  logLevel
+}
+
+func (l leveledCronLogger) Info(msg string, keysAndValues ...any) {
+	level, label, text := levelInfo, "INFO", msg
+	switch msg {
+	case "skip":
+		level, label, text = levelWarn, "WARN", "skipped run: previous invocation still running"
+	case "panic recovered":
+		level, label = levelWarn, "WARN"
+	}
+	if l.level < level {
+		return
+	}
+	l.print(label, text, keysAndValues)
+}
+
+func (l leveledCronLogger) Error(err error, msg string, keysAndValues ...any) {
+	l.print("ERROR", msg, append([]any{"error", err}, keysAndValues...))
+}
+
+func (l leveledCronLogger) print(label, msg string, keysAndValues []any) {
+	var sb strings.Builder
+	sb.WriteString(label)
+	sb.WriteString(": ")
+	sb.WriteString(msg)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		fmt.Fprintf(&sb, " %v=%v", keysAndValues[i], keysAndValues[i+1])
+	}
+	l.logger.Print(sb.String())
+}
+
 var (
 	execCommand = exec.CommandContext
 	osExit      = os.Exit
@@ -118,8 +181,8 @@ func runJob(ctx context.Context, j job, logger *log.Logger, stdout, stderr io.Wr
 	}
 }
 
-func newScheduler(logger *log.Logger) scheduler {
-	cronLogger := cron.PrintfLogger(logger)
+func newScheduler(logger *log.Logger, level logLevel) scheduler {
+	cronLogger := leveledCronLogger{logger: logger, level: level}
 	return cron.New(
 		cron.WithChain(
 			cron.Recover(cronLogger),
@@ -128,7 +191,7 @@ func newScheduler(logger *log.Logger) scheduler {
 	)
 }
 
-func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c scheduler, logger *log.Logger, stdout, stderr io.Writer) int {
+func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, newSched func(*log.Logger, logLevel) scheduler, logger *log.Logger, stdout, stderr io.Writer) int {
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
 
@@ -147,6 +210,14 @@ func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, c 
 		}
 		waitTimeout = d
 	}
+
+	level, err := parseLogLevel(getenv("LOG_LEVEL"))
+	if err != nil {
+		logger.Printf(errLogFmt, err)
+		return 1
+	}
+
+	c := newSched(logger, level)
 
 	for _, j := range jobs {
 		if _, err := c.AddFunc(j.spec, runJob(runCtx, j, logger, stdout, stderr)); err != nil {
@@ -179,5 +250,5 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 	defer signal.Stop(sigChan)
 
-	osExit(run(os.Args, os.Getenv, sigChan, newScheduler(logger), logger, os.Stdout, os.Stderr))
+	osExit(run(os.Args, os.Getenv, sigChan, newScheduler, logger, os.Stdout, os.Stderr))
 }
