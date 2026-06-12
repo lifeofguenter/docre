@@ -118,10 +118,15 @@ func assertJob(t *testing.T, j job, wantSpec string, wantArgs []string) {
 	}
 }
 
+// schedFactory adapts a prebuilt scheduler into the factory signature run expects.
+func schedFactory(s scheduler) func(*log.Logger, logLevel) scheduler {
+	return func(*log.Logger, logLevel) scheduler { return s }
+}
+
 func runAsync(args []string, getenv func(string) string, sigChan chan os.Signal, s scheduler, logger *log.Logger) <-chan int {
 	done := make(chan int, 1)
 	go func() {
-		done <- run(args, getenv, sigChan, s, logger, io.Discard, io.Discard)
+		done <- run(args, getenv, sigChan, schedFactory(s), logger, io.Discard, io.Discard)
 	}()
 	return done
 }
@@ -289,12 +294,13 @@ func testRunErrors(t *testing.T) {
 		{"missing command", []string{"app"}, envOnly("", ""), &fakeScheduler{}, "usage: app <command> [args...]"},
 		{"missing crontab", []string{"app", "echo"}, envOnly("", ""), &fakeScheduler{}, "CRONTAB is required"},
 		{"invalid wait timeout", []string{"app", "echo"}, multiEnv(map[string]string{"CRONTAB": "* * * * *", "WAIT_TIMEOUT": "not-a-duration"}), &fakeScheduler{}, "invalid WAIT_TIMEOUT"},
+		{"invalid log level", []string{"app", "echo"}, multiEnv(map[string]string{"CRONTAB": "* * * * *", "LOG_LEVEL": "bogus"}), &fakeScheduler{}, "invalid LOG_LEVEL"},
 		{"add func error", []string{"app", "echo"}, envOnly("CRONTAB", "* * * * *"), &fakeScheduler{addErr: errors.New("bad cron")}, "bad cron"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			logger, buf := newTestLogger()
-			code := run(tc.argv, tc.getenv, make(chan os.Signal, 1), tc.sched, logger, io.Discard, io.Discard)
+			code := run(tc.argv, tc.getenv, make(chan os.Signal, 1), schedFactory(tc.sched), logger, io.Discard, io.Discard)
 			assertExitCode(t, code, 1)
 			assertLogContains(t, buf, tc.wantSub)
 		})
@@ -417,7 +423,7 @@ func TestMainExits(t *testing.T) {
 
 func TestNewScheduler(t *testing.T) {
 	logger, _ := newTestLogger()
-	s := newScheduler(logger)
+	s := newScheduler(logger, levelWarn)
 	if s == nil {
 		t.Fatal("expected scheduler")
 	}
@@ -427,6 +433,71 @@ func TestNewScheduler(t *testing.T) {
 	}
 	if id == 0 {
 		t.Fatal("expected non-zero entry id")
+	}
+}
+
+func TestParseLogLevel(t *testing.T) {
+	cases := []struct {
+		in   string
+		want logLevel
+	}{
+		{"", levelWarn},
+		{"warn", levelWarn},
+		{"  WARN  ", levelWarn},
+		{"error", levelError},
+		{"Info", levelInfo},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := parseLogLevel(tc.in)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseLogLevel(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	if _, err := parseLogLevel("bogus"); err == nil {
+		t.Fatal("expected error for invalid level")
+	}
+}
+
+func logAt(level logLevel, emit func(leveledCronLogger)) string {
+	buf := &bytes.Buffer{}
+	emit(leveledCronLogger{logger: log.New(buf, "", 0), level: level})
+	return buf.String()
+}
+
+func TestLeveledCronLogger(t *testing.T) {
+	cases := []struct {
+		name    string
+		level   logLevel
+		emit    func(leveledCronLogger)
+		want    string // empty means: expect no output
+		wantOut bool
+	}{
+		{"skip promoted to warn", levelWarn, func(l leveledCronLogger) { l.Info("skip") }, "WARN: skipped run: previous invocation still running", true},
+		{"skip suppressed at error", levelError, func(l leveledCronLogger) { l.Info("skip") }, "", false},
+		{"panic recovered promoted to warn", levelWarn, func(l leveledCronLogger) { l.Info("panic recovered", "error", "boom") }, "WARN: panic recovered error=boom", true},
+		{"routine info suppressed at warn", levelWarn, func(l leveledCronLogger) { l.Info("run", "entry", 1) }, "", false},
+		{"routine info emitted at info", levelInfo, func(l leveledCronLogger) { l.Info("run", "entry", 1) }, "INFO: run entry=1", true},
+		{"error always emitted", levelError, func(l leveledCronLogger) { l.Error(errors.New("nope"), "boom") }, "ERROR: boom error=nope", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := logAt(tc.level, tc.emit)
+			if !tc.wantOut {
+				if out != "" {
+					t.Fatalf("expected no output, got %q", out)
+				}
+				return
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Fatalf("got %q, want substring %q", out, tc.want)
+			}
+		})
 	}
 }
 
