@@ -293,8 +293,8 @@ func testRunErrors(t *testing.T) {
 	}{
 		{"missing command", []string{"app"}, envOnly("", ""), &fakeScheduler{}, "usage: app <command> [args...]"},
 		{"missing crontab", []string{"app", "echo"}, envOnly("", ""), &fakeScheduler{}, "CRONTAB is required"},
-		{"invalid wait timeout", []string{"app", "echo"}, multiEnv(map[string]string{"CRONTAB": "* * * * *", "WAIT_TIMEOUT": "not-a-duration"}), &fakeScheduler{}, "invalid WAIT_TIMEOUT"},
-		{"invalid log level", []string{"app", "echo"}, multiEnv(map[string]string{"CRONTAB": "* * * * *", "LOG_LEVEL": "bogus"}), &fakeScheduler{}, "invalid LOG_LEVEL"},
+		{"invalid wait timeout", []string{"app", "echo"}, multiEnv(map[string]string{"CRONTAB": "* * * * *", "DOCRE_WAIT_TIMEOUT": "not-a-duration"}), &fakeScheduler{}, "invalid DOCRE_WAIT_TIMEOUT"},
+		{"invalid log level", []string{"app", "echo"}, multiEnv(map[string]string{"CRONTAB": "* * * * *", "DOCRE_LOG_LEVEL": "bogus"}), &fakeScheduler{}, "invalid DOCRE_LOG_LEVEL"},
 		{"add func error", []string{"app", "echo"}, envOnly("CRONTAB", "* * * * *"), &fakeScheduler{addErr: errors.New("bad cron")}, "bad cron"},
 	}
 	for _, tc := range cases {
@@ -389,8 +389,8 @@ func testRunTimeoutShutdown(t *testing.T) {
 	s := &fakeScheduler{blockStop: true}
 
 	getenv := multiEnv(map[string]string{
-		"CRONTAB":      "* * * * *",
-		"WAIT_TIMEOUT": "10ms",
+		"CRONTAB":            "* * * * *",
+		"DOCRE_WAIT_TIMEOUT": "10ms",
 	})
 
 	done := runAsync([]string{"app", "echo"}, getenv, sigChan, s, logger)
