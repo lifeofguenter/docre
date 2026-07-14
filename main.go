@@ -51,7 +51,7 @@ func parseLogLevel(s string) (logLevel, error) {
 	case "info":
 		return levelInfo, nil
 	default:
-		return 0, fmt.Errorf("invalid LOG_LEVEL %q (want error, warn, or info)", s)
+		return 0, fmt.Errorf("invalid DOCRE_LOG_LEVEL %q (want error, warn, or info)", s)
 	}
 }
 
@@ -202,16 +202,16 @@ func run(args []string, getenv func(string) string, sigChan <-chan os.Signal, ne
 	}
 
 	waitTimeout := DefaultWaitTimeout
-	if v := getenv("WAIT_TIMEOUT"); v != "" {
+	if v := getenv("DOCRE_WAIT_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			logger.Printf("ERROR: invalid WAIT_TIMEOUT %q: %v", v, err)
+			logger.Printf("ERROR: invalid DOCRE_WAIT_TIMEOUT %q: %v", v, err)
 			return 1
 		}
 		waitTimeout = d
 	}
 
-	level, err := parseLogLevel(getenv("LOG_LEVEL"))
+	level, err := parseLogLevel(getenv("DOCRE_LOG_LEVEL"))
 	if err != nil {
 		logger.Printf(errLogFmt, err)
 		return 1
